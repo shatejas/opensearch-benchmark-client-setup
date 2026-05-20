@@ -4,20 +4,13 @@ import { OpensearchBenchmarkClientSetupStack } from '../lib/opensearch-benchmark
 
 const app = new cdk.App();
 
-const vpcId = app.node.tryGetContext('vpcId');
-const clusterSecurityGroupId = app.node.tryGetContext('clusterSecurityGroupId');
-
-if (!vpcId || !clusterSecurityGroupId) {
-  throw new Error('Required context: -c vpcId=<vpc-id> -c clusterSecurityGroupId=<sg-id>');
-}
-
 new OpensearchBenchmarkClientSetupStack(app, 'OsbClientStack', {
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
     region: process.env.CDK_DEFAULT_REGION,
   },
-  vpcId,
-  clusterSecurityGroupId,
+  vpcId: app.node.tryGetContext('vpcId'),
+  clusterSecurityGroupId: app.node.tryGetContext('clusterSecurityGroupId'),
   instanceType: app.node.tryGetContext('instanceType'),
   clientName: app.node.tryGetContext('clientName'),
   ebsVolumeSize: app.node.tryGetContext('ebsVolumeSize')

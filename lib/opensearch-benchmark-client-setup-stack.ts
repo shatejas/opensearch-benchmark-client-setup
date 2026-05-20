@@ -4,8 +4,8 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
 
 export interface OsbClientStackProps extends cdk.StackProps {
-  vpcId: string;
-  clusterSecurityGroupId: string;
+  vpcId?: string;
+  clusterSecurityGroupId?: string;
   instanceType?: string;
   clientName?: string;
   ebsVolumeSize?: number;
@@ -19,17 +19,24 @@ export class OpensearchBenchmarkClientSetupStack extends cdk.Stack {
     const clientName = props.clientName ?? 'osb-client';
     const ebsSize = props.ebsVolumeSize ?? 100;
 
-    const vpc = ec2.Vpc.fromLookup(this, 'ClusterVpc', { vpcId: props.vpcId });
-
-    const clusterSg = ec2.SecurityGroup.fromSecurityGroupId(
-      this, 'ClusterSg', props.clusterSecurityGroupId
-    );
+    // Use existing VPC or create a minimal one
+    const vpc = props.vpcId
+      ? ec2.Vpc.fromLookup(this, 'ClusterVpc', { vpcId: props.vpcId })
+      : new ec2.Vpc(this, 'OsbVpc', { maxAzs: 1, natGateways: 0 });
 
     const osbSg = new ec2.SecurityGroup(this, 'OsbClientSg', {
       vpc,
       description: 'OSB client security group',
       allowAllOutbound: true,
     });
+
+    // If cluster SG provided, allow OSB client to reach it on port 9200
+    if (props.clusterSecurityGroupId) {
+      const clusterSg = ec2.SecurityGroup.fromSecurityGroupId(
+        this, 'ClusterSg', props.clusterSecurityGroupId
+      );
+      clusterSg.addIngressRule(osbSg, ec2.Port.tcp(9200), 'OSB client access to OpenSearch');
+    }
 
     const isArm = instanceType.architecture === ec2.InstanceArchitecture.ARM_64;
     const machineImage = ec2.MachineImage.latestAmazonLinux2023({
@@ -65,8 +72,6 @@ export class OpensearchBenchmarkClientSetupStack extends cdk.Stack {
       iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore')
     );
     cdk.Tags.of(instance).add('Name', clientName);
-
-    clusterSg.addIngressRule(osbSg, ec2.Port.tcp(9200), 'OSB client access to OpenSearch');
 
     new cdk.CfnOutput(this, 'InstanceId', { value: instance.instanceId });
     new cdk.CfnOutput(this, 'PrivateIp', { value: instance.instancePrivateIp });
