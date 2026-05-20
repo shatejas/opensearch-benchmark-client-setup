@@ -3,7 +3,10 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
 
+export type OsbMode = 'opensource' | 'aoss' | 'aos';
+
 export interface OsbClientStackProps extends cdk.StackProps {
+  mode: OsbMode;
   vpcId?: string;
   clusterSecurityGroupId?: string;
   instanceType?: string;
@@ -14,6 +17,8 @@ export interface OsbClientStackProps extends cdk.StackProps {
 export class OpensearchBenchmarkClientSetupStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: OsbClientStackProps) {
     super(scope, id, props);
+
+    this.validateProps(props);
 
     const instanceType = new ec2.InstanceType(props.instanceType ?? 'c6g.4xlarge');
     const clientName = props.clientName ?? 'osb-client';
@@ -29,14 +34,6 @@ export class OpensearchBenchmarkClientSetupStack extends cdk.Stack {
       description: 'OSB client security group',
       allowAllOutbound: true,
     });
-
-    // If cluster SG provided, allow OSB client to reach it on port 9200
-    if (props.clusterSecurityGroupId) {
-      const clusterSg = ec2.SecurityGroup.fromSecurityGroupId(
-        this, 'ClusterSg', props.clusterSecurityGroupId
-      );
-      clusterSg.addIngressRule(osbSg, ec2.Port.tcp(9200), 'OSB client access to OpenSearch');
-    }
 
     const isArm = instanceType.architecture === ec2.InstanceArchitecture.ARM_64;
     const machineImage = ec2.MachineImage.latestAmazonLinux2023({
@@ -73,7 +70,42 @@ export class OpensearchBenchmarkClientSetupStack extends cdk.Stack {
     );
     cdk.Tags.of(instance).add('Name', clientName);
 
+    // Mode-specific configuration
+    switch (props.mode) {
+      case 'opensource':
+        const clusterSg = ec2.SecurityGroup.fromSecurityGroupId(
+          this, 'ClusterSg', props.clusterSecurityGroupId!
+        );
+        clusterSg.addIngressRule(osbSg, ec2.Port.tcp(9200), 'OSB client access to OpenSearch');
+        break;
+
+      case 'aoss':
+        instance.role.addToPrincipalPolicy(new iam.PolicyStatement({
+          actions: ['aoss:APIAccessAll'],
+          resources: ['*'],
+        }));
+        break;
+
+      case 'aos':
+        instance.role.addToPrincipalPolicy(new iam.PolicyStatement({
+          actions: ['es:ESHttpGet', 'es:ESHttpPut', 'es:ESHttpPost', 'es:ESHttpHead', 'es:ESHttpDelete'],
+          resources: ['*'],
+        }));
+        break;
+    }
+
     new cdk.CfnOutput(this, 'InstanceId', { value: instance.instanceId });
     new cdk.CfnOutput(this, 'PrivateIp', { value: instance.instancePrivateIp });
+  }
+
+  private validateProps(props: OsbClientStackProps): void {
+    if (props.mode === 'opensource') {
+      if (!props.vpcId) {
+        throw new Error("mode 'opensource' requires vpcId");
+      }
+      if (!props.clusterSecurityGroupId) {
+        throw new Error("mode 'opensource' requires clusterSecurityGroupId");
+      }
+    }
   }
 }
