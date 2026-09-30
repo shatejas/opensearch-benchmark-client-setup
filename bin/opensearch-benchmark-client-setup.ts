@@ -33,4 +33,5 @@ new OpensearchBenchmarkClientSetupStack(app, stackName, {
     : undefined,
   resultsBucket: app.node.tryGetContext('resultsBucket'),
   resultsPrefix: app.node.tryGetContext('resultsPrefix'),
+  datasetsBucket: app.node.tryGetContext('datasetsBucket'),
 });

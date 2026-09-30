@@ -39,6 +39,30 @@ test('resultsPrefix narrows the grant', () => {
   expect(statements[0].Resource).toBe('arn:aws:s3:::my-results/runs/r-123/*');
 });
 
+function statementsFor(template: Template, action: string): any[] {
+  const policies = template.findResources('AWS::IAM::Policy');
+  return Object.values(policies)
+    .flatMap((p: any) => p.Properties.PolicyDocument.Statement)
+    .filter((s: any) => s.Action === action);
+}
+
+test('no dataset grant without datasetsBucket', () => {
+  const t = synth();
+  expect(statementsFor(t, 's3:GetObject')).toHaveLength(0);
+  expect(statementsFor(t, 's3:ListBucket')).toHaveLength(0);
+});
+
+test('datasetsBucket grants read-only access to that bucket', () => {
+  const t = synth({ datasetsBucket: 'my-datasets' });
+  const get = statementsFor(t, 's3:GetObject');
+  const list = statementsFor(t, 's3:ListBucket');
+  expect(get).toHaveLength(1);
+  expect(get[0].Resource).toBe('arn:aws:s3:::my-datasets/*');
+  expect(list).toHaveLength(1);
+  expect(list[0].Resource).toBe('arn:aws:s3:::my-datasets');
+  expect(putObjectStatements(t)).toHaveLength(0);
+});
+
 test('aoss mode still grants aoss:APIAccessAll', () => {
   synth().hasResourceProperties('AWS::IAM::Policy', {
     PolicyDocument: {
