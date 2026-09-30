@@ -1,17 +1,72 @@
-// import * as cdk from 'aws-cdk-lib/core';
-// import { Template } from 'aws-cdk-lib/assertions';
-// import * as OpensearchBenchmarkClientSetup from '../lib/opensearch-benchmark-client-setup-stack';
+import * as cdk from 'aws-cdk-lib/core';
+import { Match, Template } from 'aws-cdk-lib/assertions';
+import { OpensearchBenchmarkClientSetupStack } from '../lib/opensearch-benchmark-client-setup-stack';
 
-// example test. To run these tests, uncomment this file along with the
-// example resource in lib/opensearch-benchmark-client-setup-stack.ts
-test('SQS Queue Created', () => {
-//   const app = new cdk.App();
-//     // WHEN
-//   const stack = new OpensearchBenchmarkClientSetup.OpensearchBenchmarkClientSetupStack(app, 'MyTestStack');
-//     // THEN
-//   const template = Template.fromStack(stack);
+const env = { account: '111111111111', region: 'us-east-1' };
 
-//   template.hasResourceProperties('AWS::SQS::Queue', {
-//     VisibilityTimeout: 300
-//   });
+function synth(extra: Record<string, unknown> = {}): Template {
+  const app = new cdk.App();
+  const stack = new OpensearchBenchmarkClientSetupStack(app, 'TestStack', {
+    env,
+    mode: 'aoss',
+    ...extra,
+  });
+  return Template.fromStack(stack);
+}
+
+function putObjectStatements(template: Template): any[] {
+  const policies = template.findResources('AWS::IAM::Policy');
+  return Object.values(policies)
+    .flatMap((p: any) => p.Properties.PolicyDocument.Statement)
+    .filter((s: any) => s.Action === 's3:PutObject');
+}
+
+test('no S3 grant without resultsBucket (existing behaviour)', () => {
+  expect(putObjectStatements(synth())).toHaveLength(0);
+});
+
+test('resultsBucket grants PutObject on the default runs/ prefix only', () => {
+  const statements = putObjectStatements(synth({ resultsBucket: 'my-results' }));
+  expect(statements).toHaveLength(1);
+  expect(statements[0].Resource).toBe('arn:aws:s3:::my-results/runs/*');
+  expect(statements[0].Effect).toBe('Allow');
+});
+
+test('resultsPrefix narrows the grant', () => {
+  const statements = putObjectStatements(
+    synth({ resultsBucket: 'my-results', resultsPrefix: 'runs/r-123/' }),
+  );
+  expect(statements[0].Resource).toBe('arn:aws:s3:::my-results/runs/r-123/*');
+});
+
+function statementsFor(template: Template, action: string): any[] {
+  const policies = template.findResources('AWS::IAM::Policy');
+  return Object.values(policies)
+    .flatMap((p: any) => p.Properties.PolicyDocument.Statement)
+    .filter((s: any) => s.Action === action);
+}
+
+test('no dataset grant without datasetsBucket', () => {
+  const t = synth();
+  expect(statementsFor(t, 's3:GetObject')).toHaveLength(0);
+  expect(statementsFor(t, 's3:ListBucket')).toHaveLength(0);
+});
+
+test('datasetsBucket grants read-only access to that bucket', () => {
+  const t = synth({ datasetsBucket: 'my-datasets' });
+  const get = statementsFor(t, 's3:GetObject');
+  const list = statementsFor(t, 's3:ListBucket');
+  expect(get).toHaveLength(1);
+  expect(get[0].Resource).toBe('arn:aws:s3:::my-datasets/*');
+  expect(list).toHaveLength(1);
+  expect(list[0].Resource).toBe('arn:aws:s3:::my-datasets');
+  expect(putObjectStatements(t)).toHaveLength(0);
+});
+
+test('aoss mode still grants aoss:APIAccessAll', () => {
+  synth().hasResourceProperties('AWS::IAM::Policy', {
+    PolicyDocument: {
+      Statement: Match.arrayWith([Match.objectLike({ Action: 'aoss:APIAccessAll' })]),
+    },
+  });
 });

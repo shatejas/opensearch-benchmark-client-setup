@@ -12,6 +12,18 @@ export interface OsbClientStackProps extends cdk.StackProps {
   instanceType?: string;
   clientName?: string;
   ebsVolumeSize?: number;
+  /**
+   * Optional S3 bucket the client may upload benchmark artifacts to.
+   * Grants s3:PutObject on `arn:aws:s3:::<bucket>/<resultsPrefix>*` only.
+   */
+  resultsBucket?: string;
+  /** Key prefix inside resultsBucket the client may write under. Default `runs/`. */
+  resultsPrefix?: string;
+  /**
+   * Optional S3 bucket holding benchmark datasets. Grants read-only access:
+   * s3:GetObject on its objects and s3:ListBucket on the bucket.
+   */
+  datasetsBucket?: string;
 }
 
 export class OpensearchBenchmarkClientSetupStack extends cdk.Stack {
@@ -92,6 +104,25 @@ export class OpensearchBenchmarkClientSetupStack extends cdk.Stack {
           resources: ['*'],
         }));
         break;
+    }
+
+    if (props.resultsBucket) {
+      const prefix = props.resultsPrefix ?? 'runs/';
+      instance.role.addToPrincipalPolicy(new iam.PolicyStatement({
+        actions: ['s3:PutObject'],
+        resources: [`arn:aws:s3:::${props.resultsBucket}/${prefix}*`],
+      }));
+    }
+
+    if (props.datasetsBucket) {
+      instance.role.addToPrincipalPolicy(new iam.PolicyStatement({
+        actions: ['s3:GetObject'],
+        resources: [`arn:aws:s3:::${props.datasetsBucket}/*`],
+      }));
+      instance.role.addToPrincipalPolicy(new iam.PolicyStatement({
+        actions: ['s3:ListBucket'],
+        resources: [`arn:aws:s3:::${props.datasetsBucket}`],
+      }));
     }
 
     new cdk.CfnOutput(this, 'InstanceId', { value: instance.instanceId });
