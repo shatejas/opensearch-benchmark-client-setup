@@ -1,6 +1,6 @@
 import * as cdk from 'aws-cdk-lib/core';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import { OpensearchBenchmarkClientSetupStack } from '../lib/opensearch-benchmark-client-setup-stack';
+import { OpensearchBenchmarkClientSetupStack, OsbClientNetworkStack } from '../lib/opensearch-benchmark-client-setup-stack';
 
 const env = { account: '111111111111', region: 'us-east-1' };
 
@@ -69,4 +69,41 @@ test('aoss mode still grants aoss:APIAccessAll', () => {
       Statement: Match.arrayWith([Match.objectLike({ Action: 'aoss:APIAccessAll' })]),
     },
   });
+});
+
+function instanceProps(template: Template): any {
+  return Object.values(template.findResources('AWS::EC2::Instance'))[0].Properties;
+}
+
+test('public is the default: the instance keeps its public subnet (existing behaviour)', () => {
+  const t = synth();
+  expect(instanceProps(t).NetworkInterfaces).toBeUndefined();
+});
+
+test('subnetType private puts the instance in a private subnet with no public IP', () => {
+  const t = synth({ vpcId: 'vpc-123', subnetType: 'private' });
+  const ni = instanceProps(t).NetworkInterfaces;
+  expect(ni).toHaveLength(1);
+  expect(ni[0].AssociatePublicIpAddress).toBe(false);
+  // the lookup's dummy VPC names its private subnets p-12345 / p-67890 and its public ones s-12345 / s-67890
+  expect(String(ni[0].SubnetId)).toMatch(/^p-/);
+});
+
+test('subnetType private without vpcId is refused (no NAT to egress through)', () => {
+  expect(() => synth({ subnetType: 'private' })).toThrow(/requires vpcId/);
+});
+
+test('an unknown subnetType is refused', () => {
+  expect(() => synth({ vpcId: 'vpc-123', subnetType: 'isolated' as any })).toThrow(/public' or 'private/);
+});
+
+test('the client network: one NAT gateway, a private subnet, an S3 gateway endpoint, the VPC id output', () => {
+  const app = new cdk.App();
+  const t = Template.fromStack(new OsbClientNetworkStack(app, 'Net', { env }));
+  t.resourceCountIs('AWS::EC2::VPC', 1);
+  t.resourceCountIs('AWS::EC2::NatGateway', 1);
+  t.resourceCountIs('AWS::EC2::Subnet', 2);
+  t.hasResourceProperties('AWS::EC2::Subnet', { MapPublicIpOnLaunch: false });
+  t.hasResourceProperties('AWS::EC2::VPCEndpoint', { VpcEndpointType: 'Gateway' });
+  t.hasOutput('VpcId', {});
 });
