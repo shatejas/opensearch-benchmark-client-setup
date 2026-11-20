@@ -24,6 +24,38 @@ export interface OsbClientStackProps extends cdk.StackProps {
    * s3:GetObject on its objects and s3:ListBucket on the bucket.
    */
   datasetsBucket?: string;
+  /**
+   * Where the instance goes: 'public' (a public subnet with a public IP; the default, as before) or
+   * 'private' (a private subnet that reaches the internet through a NAT gateway, no public IP). An account
+   * with VPC Block Public Access in block-ingress mode cuts the public path in both directions, so a client
+   * there needs 'private'. 'private' requires a vpcId whose VPC has a private subnet with a NAT route.
+   */
+  subnetType?: 'public' | 'private';
+}
+
+/**
+ * The shared network for clients that have no cluster VPC (aoss, aos): one VPC with a public subnet that
+ * holds one NAT gateway and a private subnet for the clients, plus a free S3 gateway endpoint so dataset
+ * downloads don't go through the NAT. One per account and region (OsbClientNetwork-<region>); every client
+ * deploys into it with vpcId=<its VPC> and subnetType=private.
+ */
+export class OsbClientNetworkStack extends cdk.Stack {
+  readonly vpc: ec2.Vpc;
+
+  constructor(scope: Construct, id: string, props: cdk.StackProps) {
+    super(scope, id, props);
+    this.vpc = new ec2.Vpc(this, 'OsbClientVpc', {
+      ipAddresses: ec2.IpAddresses.cidr('10.40.0.0/16'),
+      maxAzs: 1,
+      natGateways: 1,
+      subnetConfiguration: [
+        { name: 'public', subnetType: ec2.SubnetType.PUBLIC, cidrMask: 24 },
+        { name: 'private', subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS, cidrMask: 20 },
+      ],
+      gatewayEndpoints: { S3: { service: ec2.GatewayVpcEndpointAwsService.S3 } },
+    });
+    new cdk.CfnOutput(this, 'VpcId', { value: this.vpc.vpcId });
+  }
 }
 
 export class OpensearchBenchmarkClientSetupStack extends cdk.Stack {
@@ -63,7 +95,9 @@ export class OpensearchBenchmarkClientSetupStack extends cdk.Stack {
 
     const instance = new ec2.Instance(this, 'OsbClientInstance', {
       vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+      vpcSubnets: { subnetType: props.subnetType === 'private' ? ec2.SubnetType.PRIVATE_WITH_EGRESS
+                                                               : ec2.SubnetType.PUBLIC },
+      associatePublicIpAddress: props.subnetType === 'private' ? false : undefined,
       instanceType,
       machineImage,
       securityGroup: osbSg,
@@ -130,6 +164,13 @@ export class OpensearchBenchmarkClientSetupStack extends cdk.Stack {
   }
 
   private validateProps(props: OsbClientStackProps): void {
+    if (props.subnetType !== undefined && !['public', 'private'].includes(props.subnetType)) {
+      throw new Error("subnetType must be 'public' or 'private'");
+    }
+    if (props.subnetType === 'private' && !props.vpcId) {
+      // a VPC created per client has no NAT gateway (natGateways: 0): there is no private egress to land in
+      throw new Error("subnetType 'private' requires vpcId (a VPC with a NAT route, e.g. OsbClientNetwork-<region>)");
+    }
     if (props.mode === 'opensource') {
       if (!props.vpcId) {
         throw new Error("mode 'opensource' requires vpcId");
